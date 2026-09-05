@@ -11,8 +11,8 @@
 #              which ship native kernels for those parts; everything else to
 #              pytorch.org's ROCm index. pytorch.org wheels are built against
 #              ROCm 6.x and segfault on a 7.x runtime, so the choice matters.
-# macOS:       the default PyPI torch wheel includes MPS. Note the port is not
-#              yet verified on a Mac (see MPS_PORT.md).
+# macOS:       the default PyPI torch wheel includes MPS. Verified on an M4 Pro
+#              with torch 2.14 (reconstruction; see MPS_PORT.md for the panorama caveat).
 # =============================================================================
 set -euo pipefail
 

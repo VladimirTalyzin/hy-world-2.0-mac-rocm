@@ -6,6 +6,17 @@
 # (via os.environ.setdefault), so sourcing this file is optional — it exists to
 # make the settings visible and overridable from the shell.
 
+# macOS / Apple Silicon: none of the ROCm knobs apply. Set the two MPS ones
+# instead (both are also applied by hyworld2/compat/backend.py): ops without a
+# Metal kernel fall back to the CPU rather than raising, and the allocator's
+# soft high-watermark cap is lifted so a long run is bounded by unified memory
+# rather than by a fraction of it.
+if [ "$(uname)" = "Darwin" ]; then
+    export PYTORCH_ENABLE_MPS_FALLBACK=${PYTORCH_ENABLE_MPS_FALLBACK:-1}
+    export PYTORCH_MPS_HIGH_WATERMARK_RATIO=${PYTORCH_MPS_HIGH_WATERMARK_RATIO:-0.0}
+    return 0 2>/dev/null || exit 0
+fi
+
 # Unlock AOTriton flash / mem-efficient SDPA on architectures ROCm still marks
 # experimental (RDNA3 / RDNA3.5: gfx1100, gfx1101, gfx1151, ...). Without it
 # scaled_dot_product_attention silently drops to the MATH backend: ~13x slower

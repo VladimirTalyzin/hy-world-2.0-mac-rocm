@@ -3,6 +3,7 @@
 from .backend import (  # noqa: F401
     autocast,
     can_compile,
+    configure_mps_env,
     configure_rocm_env,
     maybe_compile,
     describe,

@@ -14,7 +14,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${1:?usage: run_panogen.sh <input-image> [args...]}"
 shift || true
 
-PYTHON="${PYTHON:-$HERE/../venv/Scripts/python.exe}"
+# The project venv: bin/ on macOS and Linux, Scripts/ on Windows.
+PYTHON="${PYTHON:-$HERE/../venv/bin/python}"
+[ -x "$PYTHON" ] || PYTHON="$HERE/../venv/Scripts/python.exe"
 [ -x "$PYTHON" ] || PYTHON="python"
 WEIGHTS="${HYWORLD_WEIGHTS:-$HERE/../weights}"
 

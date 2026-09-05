@@ -47,7 +47,9 @@ Modified upstream files:
   hyworld2/worldrecon/pipeline.py
       guard the torch.distributed / FSDP imports; use compat.autocast and
       compat.preferred_dtype instead of hardcoded CUDA/bf16; resolve local
-      weight directories; timing and logging tweaks.
+      weight directories; synchronise any non-CPU device (not only CUDA)
+      before reading the inference timer; drain the device before the
+      interpreter exits; timing and logging tweaks.
   hyworld2/worldrecon/hyworldmirror/models/layers/attention.py
       route attention through hyworld2/compat/attention.py (FlashAttention on
       CUDA, scaled_dot_product_attention elsewhere).

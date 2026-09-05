@@ -213,6 +213,11 @@ I18N: dict[str, dict[str, str]] = {
         "log_views_ready": "Wrote {n} perspective views; reconstructing…",
         "unloaded": "Unloaded {name}.",
         "mem_no_gpu": "No GPU device — nothing to report.",
+        "mem_report_mps": (
+            "Metal allocated: {alloc:.2f} GiB • held by the driver: {reserved:.2f} GiB • "
+            "unified memory available to the GPU: {total:.2f} GiB (of {ram:.0f} GB installed)\n"
+            "HY-Pano 2.0 loaded: {pano} • WorldMirror 2.0 loaded: {recon}"
+        ),
         "mem_report": (
             "GPU allocated: {alloc:.2f} GiB • reserved: {reserved:.2f} GiB • free: {free:.2f} / {total:.2f} GiB\n"
             "HY-Pano 2.0 loaded: {pano} • WorldMirror 2.0 loaded: {recon}"
@@ -375,6 +380,11 @@ I18N: dict[str, dict[str, str]] = {
         "log_views_ready": "已生成 {n} 个透视视角；正在重建…",
         "unloaded": "已卸载 {name}。",
         "mem_no_gpu": "没有 GPU 设备——无可报告内容。",
+        "mem_report_mps": (
+            "Metal 已分配：{alloc:.2f} GiB • 驱动占用：{reserved:.2f} GiB • "
+            "GPU 可用的统一内存：{total:.2f} GiB（共安装 {ram:.0f} GB）\n"
+            "HY-Pano 2.0 已加载：{pano} • WorldMirror 2.0 已加载：{recon}"
+        ),
         "mem_report": (
             "GPU 已分配：{alloc:.2f} GiB • 已保留：{reserved:.2f} GiB • 可用：{free:.2f} / {total:.2f} GiB\n"
             "HY-Pano 2.0 已加载：{pano} • WorldMirror 2.0 已加载：{recon}"
@@ -539,6 +549,11 @@ I18N: dict[str, dict[str, str]] = {
         "log_views_ready": "Записано ракурсов: {n}; реконструкция…",
         "unloaded": "Выгружено: {name}.",
         "mem_no_gpu": "GPU не обнаружен — отчитываться не о чем.",
+        "mem_report_mps": (
+            "Metal занято: {alloc:.2f} GiB • удерживает драйвер: {reserved:.2f} GiB • "
+            "единой памяти доступно GPU: {total:.2f} GiB (из {ram:.0f} GB установленных)\n"
+            "HY-Pano 2.0 загружена: {pano} • WorldMirror 2.0 загружена: {recon}"
+        ),
         "mem_report": (
             "GPU занято: {alloc:.2f} GiB • зарезервировано: {reserved:.2f} GiB • свободно: {free:.2f} / {total:.2f} GiB\n"
             "HY-Pano 2.0 загружена: {pano} • WorldMirror 2.0 загружена: {recon}"
@@ -932,6 +947,17 @@ def _unload(which: str) -> None:
 
 def _memory_report(lang: str) -> str:
     loaded = dict(pano="✔" if _pano_pipe is not None else "—", recon="✔" if _recon_pipe is not None else "—")
+    if compat.device_type() == "mps":
+        # Unified memory: there is no "free on device" figure. recommended_max_memory
+        # is the share of RAM Metal lets a process use; driver_allocated is what the
+        # allocator currently holds (allocated + cached), which is what a second
+        # process would compete with.
+        budget = getattr(torch.mps, "recommended_max_memory", lambda: 0)()   # torch >= 2.3
+        return t(lang, "mem_report_mps",
+                 alloc=torch.mps.current_allocated_memory() / 2**30,
+                 reserved=torch.mps.driver_allocated_memory() / 2**30,
+                 total=budget / 2**30,
+                 ram=psutil.virtual_memory().total / 2**30, **loaded)
     if compat.device_type() != "cuda":
         return t(lang, "mem_no_gpu")
     free, total = torch.cuda.mem_get_info()
@@ -1148,6 +1174,12 @@ def _free_gpu_cache(tag: str) -> None:
     with the CPU spinning and the GPU idle: the allocator could not find room
     and neither could it give up.
     """
+    if compat.device_type() == "mps":
+        before = torch.mps.driver_allocated_memory()
+        compat.empty_cache()
+        print(f"[Memory] {tag}: released {(before - torch.mps.driver_allocated_memory()) / 2**30:.2f} GiB of cache, "
+              f"{torch.mps.driver_allocated_memory() / 2**30:.2f} GiB held by Metal", flush=True)
+        return
     if compat.device_type() != "cuda":
         return
     before = torch.cuda.memory_reserved()
@@ -1257,13 +1289,13 @@ def run_reconstruction(files, example, target_size, enable_bf16, sky, edge, conf
     if not paths and example:
         paths = _example_files(example) or []
     if not paths:
-        yield t(lang, "st_idle"), u, u, u, u, t(lang, "err_no_files")
+        yield t(lang, "st_idle"), u, u, u, u, t(lang, "err_no_files"), u
         return
     run_dir = _new_run_dir("recon")
     try:
         input_path = _stage_inputs(paths, run_dir)
     except ValueError as e:
-        yield t(lang, "st_idle"), u, u, u, u, t(lang, "err_failed", e=e)
+        yield t(lang, "st_idle"), u, u, u, u, t(lang, "err_failed", e=e), u
         return
 
     def job():

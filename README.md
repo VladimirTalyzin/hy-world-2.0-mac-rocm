@@ -17,12 +17,12 @@ HY-World 2.0 turns photos into 3D worlds. This repository ports it, adds a local
 | **NVIDIA / CUDA** | ✅ upstream | ✅ upstream | ✅ | ✅ | ✅ upstream, multi-GPU |
 | **AMD / ROCm, Windows** | ✅ **verified** | ✅ **verified** | ✅ **verified** | ✅ **verified** (HIP build) | ⚠️ runs end to end, slow, CLI only |
 | **AMD / ROCm, Linux** | ✅ same code path | ✅ same code path | ✅ | ✅ | ⚠️ as above |
-| **Apple Silicon / MPS** | ⚠️ code complete, **not yet verified** | ⚠️ needs ≥ 64 GB unified memory | ⚠️ | ❌ no Metal build of gsplat | ❌ |
+| **Apple Silicon / MPS** | ✅ **verified** | ⚠️ needs ≥ 64 GB unified memory, not run yet | ✅ **verified** | ❌ no Metal build of gsplat | ❌ |
 | **CPU only** | ✅ (very slow) | ❌ impractical | ✅ (very slow) | ❌ | ❌ |
 
 Everything marked *verified* was run on a **Radeon 8060S** (Ryzen AI Max+ 395 "Strix Halo", gfx1151, RDNA 3.5) under **Windows 11** with ROCm 7.2 and PyTorch 2.9.1 — an integrated GPU that AMD does not list as supported, which is about as unfavourable a target as this model gets. Linux/ROCm goes through exactly the same code (the compatibility layer detects HIP, not the operating system), but has not been run separately.
 
-**About macOS.** The MPS path is written, wired into every entry point, and its shared fixes are exercised daily on ROCm — but **it has not been confirmed by tests on a Mac yet**. The author will run them; the catch is that the available Mac has 24 GB of unified memory, which is enough for reconstruction (WorldMirror peaks near 14 GB) but not for panorama generation (the base model alone is 54 GB in bf16), so panorama results on Apple Silicon may stay unverified for a while. [`MPS_PORT.md`](HY-World-2.0/MPS_PORT.md) records exactly what is covered and how to validate it; reports from Mac owners are very welcome.
+**About macOS.** Reconstruction and panorama → 3D were run end to end on an **Apple M4 Pro with 24 GB** of unified memory (macOS 26.6, PyTorch 2.14.0): the CLI, the web interface with its viewer, the Results tab and every export. Outputs match a CPU fp32 reference to a fraction of a percent, and it is quick — two photos at 952 px take 6 s of inference, the 32-view bundled example 70 s, with about 5.5 GB resident. What **cannot** be verified on that Mac is panorama generation itself: the base model alone is 54 GB in bf16, so it needs a 64 GB (better 96 GB) machine, and the panorama path stays code-complete-but-unrun on Metal. [`MPS_PORT.md`](HY-World-2.0/MPS_PORT.md) records what was run, what was found and fixed, and what is left; a panorama report from a large-memory Mac is very welcome.
 
 ### What the pieces are
 
@@ -64,7 +64,7 @@ Picks the wheel index from `rocminfo` (`--install-torch` if none is present). Sa
 chmod +x scripts/install.sh && ./scripts/install.sh --recon-only
 ```
 
-The default PyPI torch wheel includes MPS. `--recon-only` is the sensible default on a Mac with less than 64 GB of unified memory (see above).
+The default PyPI torch wheel includes MPS. `--recon-only` is the sensible default on a Mac with less than 64 GB of unified memory (see above). Verified with Python 3.12 (Homebrew) and torch 2.14.0 on macOS 26.6; the launchers and `hyworld2.compat` set `PYTORCH_ENABLE_MPS_FALLBACK=1` and lift the allocator's high-watermark cap for you. The low-precision dtype is **bf16** where Metal provides it (macOS 14+), `HYWORLD_MPS_DTYPE=fp16` switches it.
 
 ### By hand
 
@@ -231,6 +231,21 @@ For reconstruction: photos of one scene taken from different positions, in the o
 
 Peak GPU memory: reconstruction 13.7 GB; panorama **58.4 GB** regardless of output size, so it needs a GPU (or unified-memory carve-out) of 64 GB, and about 64 GB of host RAM to stage the model through.
 
+## Measured on an Apple M4 Pro (24 GB unified memory, macOS 26.6, PyTorch 2.14.0)
+
+| Step | Setting | Time |
+|---|---|---|
+| Reconstruction, 2 photos | 714×952, bf16 | **6.0 s** inference, 9 s with masks and saving |
+| Reconstruction, 11 photos (Valley) | adaptive 378×672, bf16 | 14 s inference, 1.3 M Gaussians |
+| Reconstruction, 32 photos (Park_Stone) | adaptive 504×504, bf16 | 70 s inference, 1.2 M Gaussians |
+| Reconstruction, model load | | 6–10 s |
+| Panorama → 3D, 8 views at 768 px with camera priors | from the UI | **37 s** (28 s inference, 2.0 M Gaussians) |
+| Reconstruction, 2 photos at 518 px, CPU fp32 reference | `HYWORLD_DEVICE=cpu` | 39 s |
+| Attention, `(1, 16, 4096, 64)` | Metal SDPA, bf16 / fp16 / fp32 | 12.6 / 12.6 / 15.8 ms |
+| Dense matmul, 4096³ | bf16 / fp16 / fp32 | 6.0 / 6.0 / 5.5 TFLOP/s |
+
+Resident memory stays around **5.5 GB** for every reconstruction above; there is no GPU/host split on Apple Silicon, the process simply grows. Against a CPU fp32 run of the same photos the bf16 result differs by 0.14 % mean relative depth error, 0.3° mean normal angle and under 0.25° in the recovered camera rotations; fp16 is 0.44 % / 0.2° / 0.12°. bf16 is the default because it is the dtype the model was trained and verified in, and Metal runs it at the same speed as fp16 here.
+
 **Strix Halo owners:** the 128 GB is split in the BIOS between a dedicated-VRAM carve-out and system RAM, and the default split is often wrong for this workload. Weights are staged through *host* RAM on the way to the GPU; with 96 GB carved out for VRAM and 32 GB left for Windows, the 54 GB panorama base lived in the page file and every step looked like a hang. **64 GB / 64 GB** runs everything here. `torch.cuda.get_device_properties().total_memory` reports the carve-out plus GTT and is *not* the host budget.
 
 ---
@@ -293,7 +308,8 @@ hy-world-2.0-mac-rocm/
 - **WorldStereo 2.0 is slow and CLI-only:** 42.6 min per clip. Roughly 70 % of the transformer block's time at 32 k tokens is in neither attention nor the matmuls, and that profiling is the open problem. Stages 1–2 need SAM 3 and therefore `transformers ≥ 5`, which shares an interpreter with the verified panorama path — hence the pin below 5 for now.
 - **The `.pyd` from the gsplat build is not shipped**; build it yourself (MSVC Build Tools on Windows, hipcc on Linux). Reconstruction does not need it — only the fly-through video does.
 - **Windows extracts video frames into `C:\tmp`** (upstream hardcodes `/tmp`); the UI copies them next to the run so the mesh export can texture them.
-- **MPS is unverified** — see above.
+- **Panorama generation on Apple Silicon is unverified**: it needs ~58 GB resident and the available Mac has 24 GB. Reconstruction and panorama → 3D are verified (see above).
+- **A CLI run on MPS can crash while exiting** (`libc++abi: recursive_mutex lock failed`), seen once after a 32-view reconstruction with all results already written. The pipeline now drains the device before the interpreter tears down; if it recurs, the outputs are intact.
 
 ## Troubleshooting
 
@@ -342,7 +358,7 @@ This project is **not** affiliated with, endorsed by, or sponsored by Tencent. "
 
 Issues and PRs welcome — especially:
 
-- **Runs on a Mac.** `MPS_PORT.md` says what to run and what to look at; any result, working or not, is useful.
+- **Panorama generation on a Mac with 64 GB or more.** Reconstruction is verified on a 24 GB M4 Pro; the HY-Pano path has not been run on Metal. `MPS_PORT.md` says what to run and what to look at.
 - **Linux/ROCm confirmation** on discrete Radeon cards.
 - **The WorldStereo block profile** — where the missing 70 % goes at 32 k tokens.
 - **Stages 1–2 and 5** of world generation, once `transformers ≥ 5` can be tested against the panorama path.

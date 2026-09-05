@@ -341,7 +341,10 @@ def build_relief_meshes(res: SceneResult, *, step: int = 2, depth_jump: float = 
         valid = np.isfinite(depth) & (depth > 1e-6)
         if i < len(res.sky_masks):
             sky = np.asarray(Image.open(res.sky_masks[i]).convert("L").resize((W, H), Image.Resampling.NEAREST))
-            valid &= sky > 127          # the mask is white where it is NOT sky
+            # The pipeline writes ``~keep_mask``: white where the pixel IS sky
+            # (see _save_sky_mask_parallel in inference_utils.py). Read the
+            # other way round, an indoor scene lost 99 % of its vertices.
+            valid &= sky <= 127
 
         ys = np.arange(0, H, step)
         xs = np.arange(0, W, step)

@@ -112,6 +112,15 @@ def main() -> int:
         line(OK, "gpu memory", f"{free / 2**30:.1f} / {total / 2**30:.1f} GiB free")
         if have_qwen and total < 60 * 2**30:
             line(WARN, "panorama budget", "HY-Pano peaks near 58 GiB on the GPU; this device reports less")
+    elif dt == "mps":
+        budget = getattr(torch.mps, "recommended_max_memory", lambda: 0)()
+        if budget:
+            line(OK, "gpu memory", f"{budget / 2**30:.1f} GiB of unified memory available to Metal")
+            if budget < 60 * 2**30:
+                line(WARN if have_qwen else OK, "panorama budget",
+                     "HY-Pano needs ~58 GiB resident; reconstruction needs ~6 GiB and is fine here")
+        line(OK, "low precision", f"{'bf16' if compat.supports_bf16() else 'fp16'} "
+             "(HYWORLD_MPS_DTYPE=bf16|fp16 overrides)")
     try:
         import psutil
         vm = psutil.virtual_memory()

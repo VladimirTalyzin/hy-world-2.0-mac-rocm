@@ -82,3 +82,6 @@ desktop.ini
 
 # Logs.
 *.log
+
+# Claude Code session tooling (the web UI launch profile).
+.claude/

@@ -25,6 +25,7 @@ import torch
 
 __all__ = [
     "configure_rocm_env",
+    "configure_mps_env",
     "can_compile",
     "maybe_compile",
     "device_type",
@@ -93,6 +94,30 @@ def configure_rocm_env() -> None:
         pass  # a read-only home is not worth failing a whole run over
 
 
+def configure_mps_env() -> None:
+    """Apply the MPS runtime defaults, unless the user set them already.
+
+    ``PYTORCH_ENABLE_MPS_FALLBACK`` lets an op without a Metal kernel run on
+    the CPU instead of raising ``NotImplementedError`` in the middle of a
+    forward pass. ``PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0`` lifts the
+    allocator's soft cap (by default it refuses to allocate past ~1.7x the
+    recommended working set even when unified memory is still free), which
+    is what aborts a long run with "MPS backend out of memory" while the
+    system has gigabytes to spare.
+
+    Both are read lazily -- the fallback at each dispatch, the watermark when
+    the allocator is first initialised -- so setting them at import time is
+    effective as long as no MPS tensor was created before ``compat``.
+    ``launch.sh`` exports the same pair for visibility; this covers the
+    Python entry points and the CLI scripts.
+    """
+    import sys
+    if sys.platform != "darwin":
+        return
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+
+
 @functools.lru_cache(maxsize=1)
 def is_rocm() -> bool:
     return getattr(torch.version, "hip", None) is not None
@@ -135,14 +160,21 @@ def get_device(index: int | None = None) -> torch.device:
 def autocast(enabled: bool = True, dtype: torch.dtype | None = None):
     """``torch.amp.autocast`` bound to the active device type.
 
-    MPS autocast only supports fp16 in current PyTorch releases, so a bf16
-    request is downgraded there rather than raising.
+    On MPS a bf16 request is downgraded to fp16 when the Metal backend does
+    not provide bf16 autocast (older macOS / torch), rather than raising.
     """
     dt = device_type()
     if dtype is None:
         dtype = preferred_dtype()
-    if dt == "mps" and dtype is torch.bfloat16:
+    if dt == "mps" and dtype is torch.bfloat16 and not _mps_bf16():
         dtype = torch.float16
+    if dtype is torch.float32:
+        # The model asks for fp32 autocast around its heads to *undo* an
+        # outer low-precision context. CUDA and MPS answer that request by
+        # disabling autocast (with a warning); CPU autocast would instead run
+        # the heads in bf16, and the depth maps then come out as bf16 tensors
+        # that numpy cannot save. Disable it explicitly everywhere.
+        return torch.amp.autocast(dt, enabled=False)
     if dt == "cpu":
         return torch.amp.autocast("cpu", enabled=enabled, dtype=torch.bfloat16)
     return torch.amp.autocast(dt, enabled=enabled, dtype=dtype)
@@ -157,14 +189,37 @@ def supports_bf16() -> bool:
         except Exception:
             return False
     if dt == "mps":
-        # bf16 matmul support on MPS is incomplete; fp16 is the safe choice.
-        return False
+        return _mps_bf16()
     return True
 
 
+@functools.lru_cache(maxsize=1)
+def _mps_bf16() -> bool:
+    """Whether to run the low-precision path in bf16 rather than fp16 on MPS.
+
+    ``HYWORLD_MPS_DTYPE=bf16|fp16`` decides explicitly. Otherwise bf16 is
+    used when the Metal backend actually provides it: macOS 14+ (Sonoma) and
+    a torch whose MPS autocast accepts bf16, checked by running a small
+    matmul under autocast rather than by trusting a version table.
+    """
+    forced = os.environ.get("HYWORLD_MPS_DTYPE", "").lower()
+    if forced in ("bf16", "bfloat16"):
+        return True
+    if forced in ("fp16", "float16", "half"):
+        return False
+    try:
+        if not torch.backends.mps.is_macos_or_newer(14, 0):
+            return False
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")   # "target dtype is not supported" is a warning
+            with torch.amp.autocast("mps", dtype=torch.bfloat16):
+                x = torch.ones(8, 8, device="mps") @ torch.ones(8, 8, device="mps")
+        return x.dtype is torch.bfloat16 and bool(torch.isfinite(x).all())
+    except Exception:
+        return False
+
+
 def preferred_dtype() -> torch.dtype:
-    if device_type() == "mps":
-        return torch.float16
     return torch.bfloat16 if supports_bf16() else torch.float16
 
 
@@ -258,3 +313,4 @@ def describe() -> str:
 
 
 configure_rocm_env()
+configure_mps_env()

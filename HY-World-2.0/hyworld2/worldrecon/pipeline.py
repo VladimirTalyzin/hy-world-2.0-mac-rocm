@@ -656,7 +656,10 @@ class WorldMirrorPipeline:
                 fwd_kw["sp_size"] = self.sp_size
                 fwd_kw["sp_group"] = self.sp_group
             predictions = self.model(**fwd_kw)
-        if device.type == "cuda":
+        # MPS is as asynchronous as CUDA: without a sync the timer stops at the
+        # last kernel *launch* and whatever is still queued on the GPU is
+        # charged to the next stage instead.
+        if device.type != "cpu":
             compat.synchronize()
         infer_time = time.perf_counter() - t0
 
@@ -869,6 +872,14 @@ def main():
         # backend (ROCm-on-Windows), where even is_initialized() is absent.
         if dist.is_available() and dist.is_initialized():
             dist.destroy_process_group()
+        # Drain the device before the interpreter tears down. Seen once on MPS
+        # after a 32-view run: results written, then "recursive_mutex lock
+        # failed" from libc++ during exit -- the Metal stream being destroyed
+        # while work was still queued. A sync and a cache release beforehand
+        # leave nothing in flight for the destructors to trip over.
+        compat.synchronize()
+        gc.collect()
+        compat.empty_cache()
 
 
 if __name__ == "__main__":
