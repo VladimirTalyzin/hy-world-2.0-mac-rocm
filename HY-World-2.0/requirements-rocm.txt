@@ -1,0 +1,94 @@
+# ---------------------------------------------------------------------------
+# HY-World 2.0 — ROCm port dependency set
+#
+# DO NOT install torch/torchvision/torchaudio from here. The ROCm build must
+# come from AMD's wheel index (or the `rocm-sdk` wheels) *before* this file:
+#
+#   pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+#       rocm[libraries,devel] torch torchvision torchaudio
+#
+# and this port is then installed on top with --no-deps-safe pins. Upstream's
+# requirements.txt pins torch==2.7.1 + numpy==1.26.4, both of which would
+# downgrade/replace a working ROCm stack.
+#
+# Verified against: torch 2.9.1+rocmsdk20260116 (HIP 7.2), Python 3.12,
+#                   gfx1151 (Radeon 8060S / Strix Halo), Windows 11.
+# On macOS the same file applies (the default torch wheel has MPS); see MPS_PORT.md.
+# ---------------------------------------------------------------------------
+
+# --- Hugging Face stack (verified versions in brackets) ---
+# transformers is held below 5: the working HY-Pano path was verified on 4.57
+# and SAM 3 (worldgen stages 1-2, not ported) is the only thing that wants 5.
+diffusers>=0.36.0          # 0.36.0
+transformers>=4.57,<5      # 4.57.1
+peft>=0.17                 # 0.20.0
+accelerate>=1.10           # 1.14.0
+huggingface_hub>=0.34
+safetensors>=0.5
+tokenizers
+
+# --- Core model utilities (shared by worldrecon / worldgen) ---
+omegaconf
+einops
+kornia
+easydict
+scipy
+timm
+
+# --- Vision & IO ---
+Pillow
+opencv-python
+imageio[ffmpeg]
+imagesize
+matplotlib
+scikit-image
+
+# --- Text ---
+ftfy
+regex
+
+# --- 3D / point cloud ---
+trimesh
+plyfile
+
+# --- Metrics & logging ---
+torchmetrics
+loguru
+tqdm
+requests
+
+# --- Sky segmentation (worldrecon, CPU ONNX) ---
+onnxruntime
+
+# --- Video export for --save_rendered (worldrecon) ---
+# Pinned to 1.x: render_utils.py imports moviepy.editor, which moviepy 2.0
+# removed (its contents moved to the top-level package).
+moviepy<2
+
+# ---------------------------------------------------------------------------
+# Deliberately NOT installed on ROCm — see ROCM_PORT.md for the reasoning:
+#
+#   flash-attn      CUDA-only on RDNA3.5; replaced by hyworld2/compat/attention
+#                   (AOTriton flash SDPA). No accuracy or speed loss.
+#   xformers        same, and unused by the code paths this port covers.
+#   cupy            no ROCm build for Windows; only worldgen's panorama depth
+#                   solver uses it (see hyworld2/compat/sparse_solve.py).
+#   decord          no Python 3.12 / Windows wheels; video input falls back to
+#                   OpenCV frame extraction.
+#   gsplat          CUDA extension; buildable via HIP, see ROCM_PORT.md.
+#                   Only needed for rasterization/rendering, not for
+#                   feed-forward reconstruction.
+# ---------------------------------------------------------------------------
+
+# --- Web UI (gradio_app.py at the project root) ---
+# Pinned to 5.x: the UI is written against the gradio 5 API, and 5.x resolves
+# cleanly against the diffusers/transformers/huggingface_hub versions above.
+# fastapi/uvicorn host the app so the three.js viewer (viewer/) and the
+# outputs directory can be served next to it.
+gradio>=5.0.0,<6
+gradio-client>=1.3.0,<2
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+psutil                     # the status line's CPU figure (is the job computing or blocked?)
+# export3d.py: trimesh writes the GLB exports, plyfile reads the PLY results;
+# both are already listed above under "3D / point cloud".

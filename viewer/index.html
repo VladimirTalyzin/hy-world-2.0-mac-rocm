@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HY-World 2.0 — viewer</title>
+<!--
+  Stand-alone three.js viewer. gradio_app.py embeds it in an <iframe> and
+  export3d.py ships it inside the exported HTML5 scenes. It is a plain static
+  page, so it also works from any web server.
+
+  Where the scene comes from, in order of precedence:
+
+    1. window.HYWORLD_SCENE   set by export3d.py in exported pages (see the
+                              placeholder comment below). Values are URLs,
+                              relative paths, or data: URLs; "cams" may also be
+                              the camera JSON inlined as an object.
+    2. the query string       ?splat=/outputs/<run>/gaussians.ply   3D Gaussian Splatting (INRIA .ply or .splat)
+                              ?points=/outputs/<run>/points.ply     coloured point cloud
+                              ?cams=/outputs/<run>/camera_params.json   camera frusta
+                              ?glb=/outputs/<run>/mesh.glb          mesh (add &glb_yup=1 if it is y-up)
+                              ?pano=/outputs/<run>/panorama.png     360° equirectangular image
+                              ?bg=111111                            background colour (hex, no #)
+
+  three.js and the Gaussian-splat renderer load from jsDelivr; nothing is
+  bundled here. Splat sorting runs in a worker WITHOUT SharedArrayBuffer so
+  the page does not need cross-origin-isolation headers.
+-->
+<!-- HYWORLD_SCENE -->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #ddd;
+               font: 12px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #root { position: absolute; inset: 0; }
+  #root canvas { display: block; }
+  #hud { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6); padding: 8px 10px;
+         border-radius: 8px; user-select: none; max-width: 300px; }
+  #hud label { display: block; white-space: nowrap; }
+  #hud input[type=range] { width: 100px; vertical-align: middle; }
+  #hud button { background: #333; color: #ddd; border: 1px solid #555; border-radius: 5px;
+                padding: 2px 8px; cursor: pointer; margin: 4px 4px 0 0; }
+  #hud .info { color: #aaa; margin-top: 4px; }
+  #hud .title { font-weight: 600; margin-bottom: 4px; }
+  #msg { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.6); padding: 4px 8px;
+         border-radius: 6px; color: #bbb; max-width: 70%; }
+  #msg:empty { display: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
+} }
+</script>
+</head>
+<body>
+<div id="root"></div>
+<div id="hud"></div>
+<div id="msg">loading…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ---- scene description ------------------------------------------------------
+const q = new URLSearchParams(location.search);
+const cfg = window.HYWORLD_SCENE || {
+  splat: q.get('splat'), points: q.get('points'), cams: q.get('cams'), glb: q.get('glb'),
+  pano: q.get('pano'), bg: q.get('bg'), camsize: q.get('camsize'),
+  glb_yup: q.get('glb_yup') === '1', title: q.get('title'),
+};
+const isFile = location.protocol === 'file:';
+
+const root = document.getElementById('root');
+const hud = document.getElementById('hud');
+const msgEl = document.getElementById('msg');
+const say = (s) => { msgEl.textContent = s || ''; };
+const bg = new THREE.Color('#' + (cfg.bg || '111111'));
+
+// WorldMirror uses the OpenCV camera convention (x right, y down, z forward)
+// and puts its first camera at the identity, so "just behind the origin,
+// looking down +z" is where that camera stood.
+const UP = [0, -1, 0], POS = [0, 0, -0.3], LOOK = [0, 0, 1];
+
+// ---- tiny HUD helpers ------------------------------------------------------
+function addTitle(text) {
+  const d = document.createElement('div'); d.className = 'title'; d.textContent = text; hud.appendChild(d);
+}
+function addButton(label, onClick) {
+  const b = document.createElement('button'); b.textContent = label; b.onclick = onClick;
+  hud.appendChild(b); return b;
+}
+function addToggle(label, checked, onChange) {
+  const l = document.createElement('label'); const c = document.createElement('input');
+  c.type = 'checkbox'; c.checked = checked; c.onchange = () => onChange(c.checked);
+  l.append(c, ' ' + label); hud.appendChild(l); return c;
+}
+function addRange(label, min, max, step, value, onInput) {
+  const l = document.createElement('label'); const r = document.createElement('input');
+  r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = value;
+  r.oninput = () => onInput(parseFloat(r.value));
+  l.append(label + ' ', r); hud.appendChild(l); return r;
+}
+function addInfo(text) {
+  const d = document.createElement('div'); d.className = 'info'; d.textContent = text; hud.appendChild(d);
+}
+function fullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+}
+if (cfg.title) { addTitle(cfg.title); document.title = cfg.title; }
+
+// ---- 360° panorama ---------------------------------------------------------
+function panoViewer(url) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  root.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 200);
+  camera.position.set(0, 0, 0.1);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableZoom = false; controls.enablePan = false; controls.enableDamping = true;
+  controls.rotateSpeed = -0.35;           // drag the image, not the camera
+  controls.target.set(0, 0, 0);
+
+  new THREE.TextureLoader().load(url, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const geo = new THREE.SphereGeometry(50, 64, 48);
+    geo.scale(-1, 1, 1);                  // look at the inside of the sphere
+    scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex })));
+    say('');
+  }, undefined, () => say('failed to load the panorama'));
+
+  renderer.domElement.addEventListener('wheel', (e) => {
+    camera.fov = THREE.MathUtils.clamp(camera.fov + e.deltaY * 0.03, 25, 110);
+    camera.updateProjectionMatrix(); e.preventDefault();
+  }, { passive: false });
+
+  const resize = () => {
+    const w = root.clientWidth, h = root.clientHeight;
+    renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  };
+  window.addEventListener('resize', resize); resize();
+
+  addButton('⛶ Fullscreen', fullscreen);
+  addInfo('drag: look around · wheel: zoom');
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+}
+
+// ---- 3D scene: splats / points / cameras / mesh -----------------------------
+function loadPoints(url, scene, extras, visible) {
+  return new Promise((resolve) => {
+    say('loading points…');
+    new PLYLoader().load(url, (geo) => {
+      geo.computeBoundingSphere();
+      const radius = geo.boundingSphere ? geo.boundingSphere.radius : 1;
+      const mat = new THREE.PointsMaterial({
+        size: Math.max(0.0005, radius * 0.004), vertexColors: geo.hasAttribute('color'), sizeAttenuation: true,
+      });
+      const pts = new THREE.Points(geo, mat); pts.visible = visible; scene.add(pts);
+      extras.points = pts; extras.nPoints = geo.getAttribute('position').count; extras.radius = radius;
+      say(''); resolve(radius);
+    }, undefined, (err) => { console.error(err); say('points load failed'); resolve(null); });
+  });
+}
+
+function loadGLB(url, scene, extras, yup, visible) {
+  return new Promise((resolve) => {
+    say('loading mesh…');
+    new GLTFLoader().load(url, (gltf) => {
+      // export3d.py writes glTF y-up; the rest of the scene is in WorldMirror's
+      // y-down frame, so turn the mesh back (a 180° turn about x).
+      if (yup) gltf.scene.rotation.x = Math.PI;
+      gltf.scene.visible = visible;
+      gltf.scene.traverse((o) => { if (o.isMesh) o.material.side = THREE.DoubleSide; });
+      scene.add(gltf.scene); extras.mesh = gltf.scene;
+      if (!extras.lit) {
+        scene.add(new THREE.AmbientLight(0xffffff, 2.2));
+        extras.lit = true;
+      }
+      let tris = 0; gltf.scene.traverse((o) => { if (o.isMesh && o.geometry.index) tris += o.geometry.index.count / 3; });
+      extras.nTris = tris;
+      say(''); resolve(true);
+    }, undefined, (err) => { console.error(err); say('mesh load failed'); resolve(false); });
+  });
+}
+
+async function loadCameras(src, scene, extras, radius) {
+  let data;
+  try { data = (typeof src === 'string') ? await (await fetch(src)).json() : src; }
+  catch (e) { console.error(e); return; }
+  const extr = data.extrinsics || [];
+  // Views rendered from one point (panorama → 3D) put every frustum apex in
+  // (nearly) the same place — WorldMirror re-estimates the poses, so "nearly"
+  // is a small fraction of the scene radius, not zero. Draw those small and
+  // start them hidden so they do not bury the scene.
+  const centres = extr.map(e => new THREE.Vector3(e.matrix[0][3], e.matrix[1][3], e.matrix[2][3]));
+  const spread = centres.length ? Math.max(...centres.map(c => c.distanceTo(centres[0]))) : 0;
+  const shared = extr.length > 1 && spread < 0.02 * radius;
+  const d = parseFloat(cfg.camsize) || radius * (shared ? 0.02 : 0.08);   // frustum depth in scene units
+  const intr = Object.fromEntries((data.intrinsics || []).map(e => [String(e.camera_id), e.matrix]));
+  const group = new THREE.Group();
+  group.visible = !shared;
+  extr.forEach((e, i) => {
+    const K = intr[String(e.camera_id)]; if (!K) return;
+    const fx = K[0][0], fy = K[1][1], cx = K[0][2], cy = K[1][2], w = 2 * cx, h = 2 * cy;
+    const c = [[0, 0, 0],
+               [(0 - cx) / fx * d, (0 - cy) / fy * d, d], [(w - cx) / fx * d, (0 - cy) / fy * d, d],
+               [(w - cx) / fx * d, (h - cy) / fy * d, d], [(0 - cx) / fx * d, (h - cy) / fy * d, d]];
+    const idx = [0, 1, 0, 2, 0, 3, 0, 4, 1, 2, 2, 3, 3, 4, 4, 1];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(idx.flatMap(k => c[k])), 3));
+    const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: i === 0 ? 0xff5050 : 0x50a0ff }));
+    lines.applyMatrix4(new THREE.Matrix4().set(...e.matrix.flat()));   // row-major c2w
+    group.add(lines);
+  });
+  scene.add(group); extras.cams = group; extras.nCams = group.children.length;
+}
+
+async function sceneViewer() {
+  const { splat, points, cams, glb } = cfg;
+  if (!splat && !points && !glb) { say('nothing to show — pass ?splat=, ?points=, ?glb= or ?pano='); return; }
+
+  const scene = new THREE.Scene();
+  scene.background = bg;
+  let camera, controls, viewer = null, splatNote = '';
+
+  // The splat sorter runs in a worker built from a blob: URL, which browsers
+  // refuse on file:// pages (opaque origin). An exported single-file page
+  // opened from disk therefore shows the other layers and says so.
+  const wantSplat = splat && !isFile;
+  if (splat && isFile) splatNote = 'Gaussians need http(s) — run serve.py (see README.txt); showing mesh / points';
+
+  if (wantSplat) {
+    try {
+      const GS = await import('@mkkellogg/gaussian-splats-3d');
+      viewer = new GS.Viewer({
+        rootElement: root, threeScene: scene,
+        cameraUp: UP, initialCameraPosition: POS, initialCameraLookAt: LOOK,
+        sharedMemoryForWorkers: false,      // no COOP/COEP headers needed
+        gpuAcceleratedSort: false, sphericalHarmonicsDegree: 0,
+        logLevel: GS.LogLevel.None,
+      });
+      camera = viewer.camera; controls = viewer.controls;
+      say('loading Gaussians…');
+      const isSplatFile = /\.splat(\?|$)/i.test(splat) || (cfg.embedded && !/\.ply/i.test(splat) && splat.startsWith('data:'));
+      await viewer.addSplatScene(splat, {
+        format: isSplatFile ? GS.SceneFormat.Splat : GS.SceneFormat.Ply,
+        showLoadingUI: true, progressiveLoad: false, splatAlphaRemovalThreshold: 5,
+      });
+      viewer.start(); say('');
+    } catch (e) {
+      console.error(e); splatNote = 'Gaussian load failed: ' + e;
+      if (viewer && viewer.dispose) { try { viewer.dispose(); } catch (_) {} }
+      viewer = null; root.replaceChildren();
+    }
+  }
+  if (!viewer) {
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    root.appendChild(renderer.domElement);
+    camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
+    camera.up.set(...UP); camera.position.set(...POS);
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(...LOOK); controls.enableDamping = true;
+    const resize = () => {
+      const w = root.clientWidth, h = root.clientHeight;
+      renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+    };
+    window.addEventListener('resize', resize); resize();
+    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+    say(splatNote);
+  }
+
+  const extras = {};
+  let radius = 1;
+  // With Gaussians on screen the mesh and the points start hidden (they sit
+  // on the same surfaces); without them the mesh is the main layer.
+  if (points) { const r = await loadPoints(points, scene, extras, !viewer && !glb); if (r) radius = r; }
+  if (glb) await loadGLB(glb, scene, extras, !!cfg.glb_yup, !viewer);
+  if (cams) await loadCameras(cams, scene, extras, radius);
+
+  if (viewer && viewer.splatMesh) addToggle('Gaussians', true, v => { viewer.splatMesh.visible = v; });
+  if (extras.points) {
+    addToggle('Points', extras.points.visible, v => { extras.points.visible = v; });
+    addRange('Point size', radius * 0.0005, radius * 0.03, radius * 0.0005, extras.points.material.size,
+             v => { extras.points.material.size = v; });
+  }
+  if (extras.mesh) addToggle('Mesh', extras.mesh.visible, v => { extras.mesh.visible = v; });
+  if (extras.cams) addToggle('Cameras', extras.cams.visible, v => { extras.cams.visible = v; });
+  addButton('Reset view', () => {
+    camera.up.set(...UP); camera.position.set(...POS); controls.target.set(...LOOK); controls.update();
+  });
+  addButton('⛶ Fullscreen', fullscreen);
+  addInfo([extras.nPoints ? extras.nPoints.toLocaleString() + ' points' : '',
+           extras.nTris ? Math.round(extras.nTris).toLocaleString() + ' triangles' : '',
+           extras.nCams ? extras.nCams + ' cameras' : ''].filter(Boolean).join(' · ')
+          || 'drag: orbit · wheel: zoom · right-drag: pan');
+  if (!viewer) say(splatNote);
+}
+
+if (cfg.pano) panoViewer(cfg.pano);
+else sceneViewer().catch(e => { console.error(e); say('viewer error: ' + e); });
+</script>
+</body>
+</html>

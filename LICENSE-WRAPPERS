@@ -1,0 +1,52 @@
+MIT License
+
+Copyright (c) 2026 Vladimir Talyzin
+
+This MIT License applies ONLY to the following files and directories in this
+repository, which are the original work of Vladimir Talyzin and add AMD ROCm
+and Apple Silicon (MPS) support, a web interface and export tooling around the
+upstream Tencent HY-World 2.0 project:
+
+    gradio_app.py
+    export3d.py
+    pano3d.py
+    pano_worker.py
+    download_weights.py
+    launch.sh
+    launch.ps1
+    HY-World 2.0.cmd
+    viewer/index.html
+    tools/                 (every file)
+    scripts/               (every file)
+    README.md
+    HY-World-2.0/hyworld2/compat/            (every file)
+    HY-World-2.0/scripts/                    (every file)
+    HY-World-2.0/requirements-rocm.txt
+    HY-World-2.0/ROCM_PORT.md
+    HY-World-2.0/MPS_PORT.md
+    HY-World-2.0/WORLDGEN_PORT.md
+
+It does NOT apply to the upstream Tencent HY-World 2.0 code or model weights,
+nor to the modifications made to upstream files (listed in NOTICE), all of
+which are governed by the TENCENT HY-WORLD 2.0 COMMUNITY LICENSE AGREEMENT —
+see the LICENSE file at the root of this repository.
+
+--------------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the above-listed files (the "Wrapper Software"), to deal in the Wrapper
+Software without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Wrapper Software, and to permit persons to whom the Wrapper Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Wrapper Software.
+
+THE WRAPPER SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE WRAPPER SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE WRAPPER SOFTWARE.

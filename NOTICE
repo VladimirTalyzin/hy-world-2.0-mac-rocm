@@ -1,0 +1,102 @@
+Tencent HY-World 2.0 is licensed under the Tencent HY-World 2.0 Community
+License Agreement, Copyright (c) 2026 Tencent. All Rights Reserved. The
+trademark rights of "Tencent HY" are owned by Tencent or its affiliate.
+
+--------------------------------------------------------------------------------
+
+This repository is an independent port of Tencent HY-World 2.0 to AMD GPUs
+(ROCm / HIP, Linux and Windows) and Apple Silicon (Metal / MPS), with a local
+web interface and export tooling. It is NOT affiliated with, endorsed by, or
+sponsored by Tencent. The provider of this software is Vladimir Talyzin.
+
+Upstream: https://github.com/Tencent-Hunyuan/HY-World-2.0
+Weights:  https://huggingface.co/tencent/HY-World-2.0 (downloaded by the end
+          user with download_weights.py; no weights are redistributed here)
+
+The directory HY-World-2.0/ contains the upstream source tree at commit
+df9988efb87bfc0f4947eb3889411cf957478b06 ("Fix citation", 2026-08-13) with
+the modifications listed below. The upstream README media (assets/) and demo
+inputs (examples/) are not included.
+
+Two licences apply, see LICENSE and LICENSE-WRAPPERS:
+
+  * Everything under HY-World-2.0/ that originates upstream, the modifications
+    made to those files, the model weights and any Output produced with them:
+    TENCENT HY-WORLD 2.0 COMMUNITY LICENSE AGREEMENT (LICENSE). Note its
+    Territory clause (the licence does not apply in the European Union, the
+    United Kingdom or South Korea), its 1 million monthly-active-users
+    commercial threshold, and its Acceptable Use Policy.
+  * The wrapper code enumerated in LICENSE-WRAPPERS: MIT.
+
+Statement of modifications to the upstream work
+-----------------------------------------------
+(Section 3(b) of the Tencent licence: modified files carry this notice.)
+
+Modified upstream files:
+
+  .gitignore
+      ignore the hipify mirror and generated host shims of the gsplat build.
+  hyworld2/__init__.py
+      import hyworld2.compat first so the ROCm/MPS runtime settings apply to
+      every entry point.
+  hyworld2/panogen/pipeline_with_qwen_image.py
+      put the repo root on sys.path and load the compat layer; select the
+      device through compat; enable decode-only VAE tiling and the
+      Conv3d -> Conv2d fold on non-CUDA backends; synchronise after each
+      denoising step so the progress bar is honest; make CPU offload opt-in.
+  hyworld2/worldrecon/pipeline.py
+      guard the torch.distributed / FSDP imports; use compat.autocast and
+      compat.preferred_dtype instead of hardcoded CUDA/bf16; resolve local
+      weight directories; timing and logging tweaks.
+  hyworld2/worldrecon/hyworldmirror/models/layers/attention.py
+      route attention through hyworld2/compat/attention.py (FlashAttention on
+      CUDA, scaled_dot_product_attention elsewhere).
+  hyworld2/worldrecon/hyworldmirror/models/models/rasterization.py
+      soft-import gsplat; a descriptive error only if rasterization is called.
+  hyworld2/worldrecon/hyworldmirror/models/models/visual_transformer.py
+      quote a torch._C._distributed_c10d annotation; compat.autocast.
+  hyworld2/worldrecon/hyworldmirror/models/models/worldmirror.py
+      compat.autocast and compat.preferred_dtype for the input casts.
+  hyworld2/worldrecon/hyworldmirror/utils/render_utils.py
+      guard dist.is_initialized() with dist.is_available().
+  hyworld2/worldrecon/gradio_app.py
+      device selection through compat.
+  hyworld2/worldgen/video_gen.py, traj_render.py, gen_gs_data.py
+      sys.path bootstrap and compat import; skip device-mesh construction on a
+      single rank; single-process stand-ins for torch.distributed.
+  hyworld2/worldgen/src/general_utils.py
+      soft-import decord with an OpenCV fallback for get_last_video_frame.
+  hyworld2/worldgen/src/sp_utils/parallel_states.py
+      skip the device mesh when there is no distributed backend.
+  hyworld2/worldgen/models/worldstereo_wrapper.py
+      guard the FSDP import; build the transformer on the meta device and
+      stream the checkpoint tensor by tensor; load the text encoder in the
+      backend's half dtype; skip torch.compile where Triton is absent;
+      unroll the Wan VAE's causal Conv3d into Conv2d passes on ROCm.
+  hyworld2/worldgen/models/dmd_scheduler.py
+      device selection through compat.
+  hyworld2/worldgen/third_party/gsplat_maskgaussian/setup.py
+      HIP build: correct ROCM_HOME with the rocm-sdk wheels, clang-compatible
+      flags, device-bitcode path, glm/rocThrust/hipCUB include paths, .cu
+      shims so host sources go through hipcc on Windows.
+  hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/cuda/include/Utils.cuh
+      cooperative-groups shims (warp reductions, labeled_partition) under
+      USE_ROCM; hipcub namespace alias.
+  hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/cuda/include/Cameras.cuh
+      std::array::at() -> operator[] in device code.
+  hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/cuda/csrc/*.cu
+      explicit (const void *) casts for hipFuncSetAttribute.
+  hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/distributed.py
+      soft-import torch.distributed.nn.
+
+New files inside HY-World-2.0/ (MIT, see LICENSE-WRAPPERS):
+
+  hyworld2/compat/            device abstraction, attention dispatch, Conv3d
+                              fold/unroll, VAE tiling, distributed stand-ins,
+                              streaming checkpoint loader
+  scripts/                    rocm_env.sh, run_worldrecon.sh, run_panogen.sh
+  requirements-rocm.txt       dependency set without the CUDA-only pins
+  ROCM_PORT.md, MPS_PORT.md, WORLDGEN_PORT.md
+                              the engineering record of the port
+
+No model weights, and none of upstream's binary assets, are redistributed.

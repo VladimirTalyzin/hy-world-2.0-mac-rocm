@@ -1,0 +1,17 @@
+__pycache__/
+.claude/
+*.py[cod]
+*$py.class
+.gradio/
+inference_output/
+gradio_demo_output/
+skyseg.onnx
+*.safetensors
+*.ckpt
+CLAUDE.md
+commands.sh
+# --- ROCm port build artifacts ---
+# hipify mirrors gsplat/cuda -> gsplat/hip, and setup.py generates .cu shims
+# so host sources go through hipcc instead of MSVC. Both are regenerated.
+hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/hip/
+hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/cuda/csrc/_hip_host/

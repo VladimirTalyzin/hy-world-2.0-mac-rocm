@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# HY-World 2.0 — ROCm / MPS port. Line endings and binary assets.
+#
+# The port is developed on Windows but has to run on Linux (ROCm) and macOS
+# (MPS), so everything text is stored with LF in the repository and converted
+# on checkout according to the rules below.
+# ---------------------------------------------------------------------------
+
+# Let git detect what is text and normalise it to LF inside the repository.
+* text=auto
+
+# Shell scripts keep LF even when checked out on Windows: bash aborts on a
+# carriage return with "$'\r': command not found", which would break
+# launch.sh, scripts/install.sh, tools/setup_rocm_thirdparty.sh and the
+# run_*.sh helpers inside the vendored tree.
+*.sh text eol=lf
+
+# Windows launchers are only ever run by cmd.exe / PowerShell, and .cmd files
+# with labels genuinely need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Images and fonts: never convert, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.ttf binary
+
+# Weights and 3D exports. Gitignored, but declared so that anything slipping
+# through is not mangled by end-of-line conversion.
+*.onnx binary
+*.safetensors binary
+*.ckpt binary
+*.pth binary
+*.ply binary
+*.splat binary
+*.glb binary
+*.zip binary
